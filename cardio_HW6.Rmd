@@ -1,0 +1,174 @@
+---
+title: "cardio_HW5"
+author: "Joshua Singer"
+date: "March 18, 2019"
+output:
+  word_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r include=FALSE}
+library(tidyverse)
+library(nlme)
+library(car)
+library(MASS)
+library(lmtest)
+library(multcomp)
+library(lubridate)
+library(gridExtra)
+library(nlme)
+library(data.table)
+library(RCurl)
+library(knitr)
+library(ggcorrplot)
+source('predictgls.R')
+source('stdres.gls.R')
+source("http://peterhaschke.com/Code/multiplot.R")
+
+```
+
+
+```{r include=FALSE}
+cardio <- read.csv('https://mheaton.byu.edu/Courses/Stat469/Topics/2%20-%20TemporalCorrelation/2%20-%20Longitudinal/HWCaseStudy/Data/Tachycardia.txt', sep=" ", header=TRUE)
+
+```
+
+```{r include=FALSE}
+glimpse(cardio)
+```
+
+#1: Create exploratory plots of looking at the relationship between HEARTRTE (the response variable) and some of the explanatory variables. Comment on any general relationships you see from the data.
+```{r echo=FALSE}
+
+exp_features <- names(cardio[,-c(1, 11)])
+
+#Create scatter plots with every explanatory variable
+scat_plots <- map(exp_features, ~ ggplot(cardio, aes_string(x = .x, cardio$HEARTRTE, color = as.factor(cardio$PERIOD))) + geom_point())
+
+#ggplot(cardio, aes_string(x = as.factor(cardio$PERIOD), cardio$HEARTRTE)) + geom_boxplot()
+
+pBox <- ggplot(cardio, aes(as.factor(PERIOD), HEARTRTE)) + geom_boxplot()
+
+grid.arrange(pBox, scat_plots[[3]], scat_plots[[5]], scat_plots[[4]], nrow=2)
+```
+#2: Fit an independent MLR model with a linear effect of all variables except RANDID and PERIOD. Explore the residuals to see if there is evidence of correlation within a patients from period to period (visit to visit).
+
+```{r echo=FALSE}
+cardio.lm <- lm(log(HEARTRTE) ~. -RANDID, data=cardio)
+
+#Check correlation from period to period and the independence assumption
+corr_cardio <- matrix(cardio.lm$residuals, ncol = 3, byrow = TRUE) %>% cor()
+corr_cardio1 <- data.frame(corr_cardio)
+names(corr_cardio1) <- c("Period 1", "Period 2", "Period 3")
+ggcorrplot(corr_cardio1, ggtheme = theme_gray, colors = c("#6D9EC1", "white", "#E46726"), lab = TRUE)
+```
+Above, we can look at the correlation of the residuals to see if there is correlation from period to period. There is a strong correlation across each period with the highest being 0.5 between Period 2 & 3.
+
+
+#3: To determine an appropriate correlation structure to use, fit a longitudinal MLR model with an AR1, MA1 and general symmetric correlation matrix within each patient but independent across patients. Compare the model fits using AIC (which can be extracted from a gls() object using AIC()).
+```{r}
+#Model fit with AR1 Correlation Matrix
+fit.AR1 <- gls(log(HEARTRTE) ~. -RANDID, data=cardio, correlation=corAR1(form=~1|RANDID), method="ML")
+
+AIC(fit.AR1) #-5915.261
+
+#Model fit with MA1 Correlation Matrix
+fit.MA1 <- gls(log(HEARTRTE) ~. -RANDID, data=cardio, correlation=corARMA(form=~1|RANDID, p=0, q=1), method="ML")
+
+AIC(fit.MA1) #-5692.321
+
+#Model fit with General Symmetric Correlation Matrix
+fit.Symm <- gls(log(HEARTRTE) ~. -RANDID, data=cardio, correlation=corSymm(form=~1|RANDID), method="ML")
+
+AIC(fit.Symm) #-5993.943
+```
+The model with the general symmetric correlation matrix has the best fit based on the AIC of -5993.943
+
+#4: Write out your model for analyzing the Tachycardia data in terms of parameters. Explain and interpret any parameters associated with the model.
+
+
+This is how we will model our analysis using X, $\beta$, and $\epsilon$ with $\beta$ being our matrix of coefficients that correspond to each observation. The dimensions of the $\beta$ matrix is 11 x 1 and the dimensions of the X matrix is n x 11.
+
+$y \sim MV N(X\beta, \sigma^2B)$
+
+$log(y) = X\beta + \epsilon$
+In the model the $\beta$ matrix is $(X'X)^{-1}X'y$ where X is the design matrix and y is the vector of response variables. T
+
+$$\mathbf{B} = \left[\begin{array}
+{rrr}
+R_{1} & \dots & \dots & 0 \\
+\vdots & R_{2} & 0 & \vdots\\
+\vdots & 0 & \ddots & \vdots \\
+0 & \dots & \dots & R_{11}
+\end{array}\right]$$
+
+
+
+$$\mathbf{R} = \left[\begin{array}
+{ccc}
+1 & \rho_{12} & \rho_{13}\\
+\rho_{21} & 1 & \rho_{23}\\
+\rho_{31} & \rho_{32} & 1 \\
+\end{array}\right]$$
+
+
+The B matrix is the matrix we use as a weight for our model's variance. While the R matrix is correlation matrix to test the response based on correlation between periods.
+
+#5: Fit your longitudinal model and validate any assumptions you made to fit the model.
+```{r}
+fit.Symm <- gls(log(HEARTRTE) ~. -RANDID, data=cardio, correlation=corSymm(form=~1|RANDID), method="ML")
+
+# Linear Assumption 
+avPlots(cardio.lm)
+
+# Independent Assuption
+sres <- stdres.gls(fit.Symm)
+matrix(sres, ncol = 3, byrow = TRUE) %>% cor()
+
+# Normal Assupmetion
+ggplot(cardio, aes(x=sres)) + 
+  geom_histogram(aes(y=..density..), binwidth=.5, colour="black", fill="white")+
+  geom_density(alpha=.2, fill="#FF6666")
+
+ks.test(sres, "pnorm")
+# Comments
+
+# Equal Variance
+ggplot(data=cardio, mapping=aes(x=(fitted(fit.Symm)), y=sres)) + geom_point()
+# Equal Variance assumption looks good. 
+```
+
+#6: Is DIABETES a risk factor for Tachycardia? Justify your answer and explain any effect of DIABETES on heart rate (include uncertainty in your conclusions).
+
+Our null hypothesis is $H_0: log(HEARTRTE) = 0$ and our alternative is that $H_a: log(HEARTRTE) > 0$ when $\beta_{diabetes} = 1$.   
+```{r}
+a <- matrix(c(0,0,0,0,0,0,0,0,1,0,0,0), nrow=1)
+hyp.diab <- glht(model = fit.Symm, linfct=a, rhs = 0, alternative="two.sided") %>% summary()
+hyp.diab
+length(coef(fit.Symm))
+length(a)
+confint(hyp.diab, .95)
+```
+Based on this test we fail to reject the null hypothesis the change in heartrate is effected by whether a person has diabetes based on a p-value of 0.503. We are 95% confident that the change in heart rate will only be as high as 3.1%. 
+
+
+#7: What is the expected difference in heart rate for a female patient with at age 35 who is a smoker vs. an older female of 45 but not a smoker (assume the other characteristics are the same)? What does this say about the effect of smoking?
+
+Our null hypothesis is $H_0: log(HEARTRTE) = 0$ and our alternative is that $H_a: log(HEARTRTE) > 0$ comparing the difference in the change in heart rate between a 35 year old female smoker to a 45 year old female non-smoker.
+```{r}
+a35 <- matrix(c(0,2,0,35,0,0,1,0,1,0,0,0), nrow=1)
+a45 <- matrix(c(0,2,0,45,0,0,0,0,1,0,0,0), nrow=1)
+
+hyp.fitSymm <- glht(model = fit.Symm, linfct=a35-a45, rhs = 0, alternative="two.sided") %>% summary()
+hyp.fitSymm
+
+confint(hyp.diab, .95)
+confint(hyp.fitSymm, .95)
+```
+Based on our generalized linear hypothesis test comparing a 35 year old smoker to a 45 year old non-smoker we reject the null hypothesis with a p-value of 4.24e-11. This shows that the difference in log(heartrate) is not 0 and determine that smoking has a dramatic effect (.03756) putting a smoker with a much higher heart rate.
+
+We are 95% confident that the percent change in heart rate lies between 2.6% and 4.8% for women that are smokers versus non-smokers at the age of 35 versus 45 respectively. For our data, we are 95% confident the estimated value is 3.7% change, but are not certain this is true for the entire population.
